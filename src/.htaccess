@@ -1,0 +1,30 @@
+# Keep code and data private; only index.php and assets/ are meant to be fetched.
+DirectoryIndex index.php
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^(lib|data)(/|$) - [F,L]
+  RewriteRule ^config\.php$ - [F,L]
+</IfModule>
+
+<FilesMatch "^(config\.php|.*\.lock|.*\.tmp|.*\.bin)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+# Larger uploads where the host allows overriding PHP settings this way (ignored otherwise).
+<IfModule mod_php.c>
+  php_value upload_max_filesize 256M
+  php_value post_max_size 260M
+  php_value max_execution_time 300
+</IfModule>
+<IfModule mod_php7.c>
+  php_value upload_max_filesize 256M
+  php_value post_max_size 260M
+  php_value max_execution_time 300
+</IfModule>

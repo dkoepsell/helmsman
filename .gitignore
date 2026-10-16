@@ -1,0 +1,8 @@
+# Course data, uploads and local settings never belong in the repository.
+src/data/
+src/config.php
+dist/
+tests/e2e/out/
+*.zip.tmp
+.DS_Store
+__pycache__/
