@@ -5,7 +5,7 @@
 if (!defined('APP')) { http_response_code(404); exit; }
 
 const APP_NAME = 'heLMSman';
-define('APP_VERSION', '1.0.1');
+define('APP_VERSION', '1.0.2');
 
 // ---------- polyfills ----------
 if (!function_exists('str_contains')) {

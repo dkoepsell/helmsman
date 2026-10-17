@@ -202,12 +202,15 @@ function gradables($cid) {
     $out[$id] = ['id' => $id, 'type' => $type, 'title' => $o['title'], 'points' => (float)($o['points'] ?? 0),
       'group' => $o['group'] ?? '', 'due_at' => (int)($o['due_at'] ?? 0), 'lock_at' => (int)($o['lock_at'] ?? 0),
       'submits' => $type === 'assignment' ? !in_array('none', $o['sub_types'] ?? ['upload'], true) && !empty($o['sub_types']) : true,
-      'post_policy' => $o['post_policy'] ?? 'auto', 'omit' => !empty($o['omit'])];
+      'post_policy' => $o['post_policy'] ?? 'auto', 'omit' => !empty($o['omit']) || !empty($o['practice']), 'practice' => !empty($o['practice'])];
   };
   foreach ($c['modules'] as $m) foreach ($m['items'] as $it) if (in_array($it['type'], ['assignment', 'quiz', 'discussion'], true)) $add($it['type'], $it['ref']);
   foreach (['assignment' => 'assignments', 'quiz' => 'quizzes', 'discussion' => 'discussions'] as $t => $s) foreach ($c[$s] as $id => $o) $add($t, $id);
   return $out;
 }
+
+// Everything that counts or is due, leaving out practice quizzes.
+function graded_items($cid) { return array_filter(gradables($cid), function ($g) { return empty($g['practice']); }); }
 
 // ---------- submissions & grades ----------
 function sub_path($cid, $oid, $uid) { return "c/$cid/subs/" . safe_id($oid) . '/' . safe_id($uid); }
@@ -310,6 +313,7 @@ function student_rows($cid, $uid, $asStaff) {
   $course = course($cid);
   $rows = [];
   foreach (gradables($cid) as $g) {
+    if ($g['practice']) continue;
     if (!$asStaff) { $a = access($cid, $g['type'], $g['id']); if (!$a['ok'] && !$g['due_at']) continue; }
     $rows[$g['id']] = grade_row($course, $g, get_sub($cid, $g['id'], $uid), $asStaff);
   }
@@ -459,7 +463,50 @@ function posts($cid, $did) { return jread("c/$cid/disc/" . safe_id($did), ['post
 function qa_path($cid, $qid, $uid) { return "c/$cid/qa/" . safe_id($qid) . '/' . safe_id($uid); }
 function quiz_attempts($cid, $qid, $uid) { return jread(qa_path($cid, $qid, $uid), ['attempts' => []])['attempts']; }
 
-function quiz_points($quiz) { $p = 0; foreach ($quiz['questions'] ?? [] as $q) $p += (float)($q['points'] ?? 0); return $p; }
+function quiz_points($quiz) {
+  $p = 0;
+  foreach ($quiz['questions'] ?? [] as $q) $p += (float)($q['points'] ?? 0);
+  foreach ($quiz['pools'] ?? [] as $pl) $p += (int)$pl['pick'] * (float)$pl['points'];
+  return $p;
+}
+function quiz_question_count($quiz) {
+  $n = count(array_filter($quiz['questions'] ?? [], function ($x) { return $x['type'] !== 'text'; }));
+  foreach ($quiz['pools'] ?? [] as $pl) $n += (int)$pl['pick'];
+  return $n;
+}
+
+// ---------- question pools (Canvas question groups and banks) ----------
+function pool_questions($cid, $pid) { return jread("c/$cid/pools/" . safe_id($pid), ['questions' => []])['questions']; }
+
+// Picks this attempt's questions. Drawn questions are copied into the attempt, so later
+// edits to the bank never change a student's past attempt.
+function draw_attempt($cid, $quiz) {
+  $order = array_column($quiz['questions'] ?? [], 'id');
+  $drawn = [];
+  foreach ($quiz['pools'] ?? [] as $pl) {
+    $qs = pool_questions($cid, $pl['id']);
+    shuffle($qs);
+    foreach (array_slice($qs, 0, (int)$pl['pick']) as $q) {
+      $q['points'] = (float)$pl['points'];
+      $q['pool'] = $pl['id'];
+      $drawn[] = $q; $order[] = $q['id'];
+    }
+  }
+  return [$order, $drawn];
+}
+
+// id => question for one attempt: the quiz's fixed questions plus that attempt's draws.
+function attempt_questions($quiz, $att) {
+  $m = [];
+  foreach ($quiz['questions'] ?? [] as $q) $m[$q['id']] = $q;
+  foreach ($att['drawn'] ?? [] as $q) $m[$q['id']] = $q;
+  return $m;
+}
+function attempt_points($quiz, $att) {
+  if (empty($att['drawn'])) return quiz_points($quiz);
+  $p = 0; foreach (attempt_questions($quiz, $att) as $q) $p += (float)($q['points'] ?? 0);
+  return $p;
+}
 
 // Auto-grades one answer. Returns [points or null if manual, correct bool|null].
 function grade_answer($q, $ans) {

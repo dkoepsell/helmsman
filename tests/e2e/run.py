@@ -90,7 +90,7 @@ def run(B):
         a.click('button:has-text("Create instructor")'); check(a, 'setup')
         a.goto(B + '?r=import'); a.set_input_files('input[name=cc]', FIXTURE); a.click('button:has-text("Import")'); check(a, 'import')
         cid = re.search(r'c=(c[0-9a-f]+)', a.url).group(1)
-        assert 'quizzes with 6 questions' in a.content() or '1 quizzes with 6 questions' in a.content(), 'quiz import summary'
+        assert 'quizzes with 7 questions' in a.content(), 'quiz import summary'
         # Move the course so week 1 is open and week 2 opens in a few days.
         a.goto(B + f'?r=schedule&c={cid}')
         days = -int((time.mktime(time.strptime('2027-02-01', '%Y-%m-%d')) - time.time()) // 86400) - 2
@@ -114,6 +114,7 @@ def run(B):
         # quiz builder screenshot
         a.goto(B + f'?r=edit&c={cid}&t=quiz&id=qz_bees'); check(a, 'quiz edit'); shot(a, 'quiz-builder.png')
         # announcement
+        a.goto(B + f'?r=announcements&c={cid}'); assert 'Welcome, beekeepers' in a.content(), 'imported announcement listed'
         a.goto(B + f'?r=edit&c={cid}&t=announcement'); a.fill('input[name=title]', 'Welcome!')
         a.locator('.ed-area').click(); a.keyboard.type('Read the Welcome page first, then introduce yourself.')
         a.click('button:has-text("Save")'); check(a, 'announcement')
@@ -156,6 +157,13 @@ def run(B):
         s.wait_for_timeout(1800); shot(s, 'quiz-taking.png')
         s.click('button:has-text("Submit quiz")'); check(s, 'quiz submit')
         assert '6 / 10' in s.inner_text('.quiz-score'), 'auto-graded 6 of 10 before the essay'
+        # practice quiz drawing from a question bank: 3 questions, answers shown, not in the gradebook
+        s.goto(B + f'?r=quiz&c={cid}&id=qz_practice'); check(s, 'practice quiz')
+        assert 'practice' in s.content().lower(), 'practice label shown'
+        s.click('button:has-text("Start quiz")'); check(s, 'practice start')
+        assert s.locator('.question').count() == 3, 'one fixed question plus two drawn from the bank'
+        s.click('button:has-text("Submit quiz")'); check(s, 'practice submit')
+        assert 'Only the queen' in s.content(), 'feedback shown after a practice attempt'
 
         # --- instructor grades ---
         a.goto(B + f'?r=grading&c={cid}&id=as_log'); a.click('td a:has-text("Ana Ruiz")'); check(a, 'grader')
@@ -169,6 +177,7 @@ def run(B):
         a.goto(B + f'?r=grades&c={cid}'); check(a, 'gradebook'); shot(a, 'gradebook.png')
         csv = a.request.get(B + f'?r=gradebook_csv&c={cid}').text()
         assert 'Ana Ruiz' in csv and '9.5' in csv, 'csv export has quiz score 9.5'
+        assert 'Practice: bee basics' not in csv, 'practice quiz kept out of the CSV'
         z = a.request.get(B + f'?r=download_subs&c={cid}&id=as_log')
         assert z.status == 200 and z.body()[:2] == b'PK', 'submissions zip'
         a.goto(B + f'?r=calendar&c={cid}'); check(a, 'calendar'); shot(a, 'calendar.png')

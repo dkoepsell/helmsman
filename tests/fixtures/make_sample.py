@@ -119,6 +119,24 @@ def build():
     w('qz_bees/assessment_meta.xml', '<?xml version="1.0" encoding="UTF-8"?><quiz identifier="qz_bees" xmlns="http://canvas.instructure.com/xsd/cccv1p0"><title>Honey bee quiz</title><description>&lt;p&gt;Ten minutes, two attempts. Your best score counts.&lt;/p&gt;</description><shuffle_answers>true</shuffle_answers><time_limit>10</time_limit><allowed_attempts>2</allowed_attempts><show_correct_answers>true</show_correct_answers><available>true</available><assignment_group_identifierref>ag_quiz</assignment_group_identifierref><assignment><due_at>2027-02-13T05:59:00</due_at><assignment_group_identifierref>ag_quiz</assignment_group_identifierref></assignment></quiz>')
     res.append('<resource identifier="qz_bees" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="qz_bees/assessment_meta.xml"><file href="qz_bees/assessment_meta.xml"/><file href="non_cc_assessments/qz_bees.xml.qti"/></resource>')
 
+    # A practice quiz with one fixed question (with feedback) plus a group that draws 2 of 4
+    # questions from a question bank, as Canvas exports them.
+    bank_items = ''.join(item(f'b{k}', 'true_false_question', f'Bank statement {k}: honey bees have {n} wings.', 1,
+                              [(f'9{k}1', 'True'), (f'9{k}2', 'False')], extra=rc(f'<varequal respident="response1">9{k}{1 if n == 4 else 2}</varequal>'))
+                         for k, n in enumerate([4, 2, 4, 6], 1))
+    w('non_cc_assessments/bank_bees.xml.qti', '<?xml version="1.0" encoding="UTF-8"?><questestinterop xmlns="http://www.imsglobal.org/xsd/ims_qtiasiv1p2"><objectbank ident="bank_bees"><qtimetadata><qtimetadatafield><fieldlabel>bank_title</fieldlabel><fieldentry>Bee facts</fieldentry></qtimetadatafield></qtimetadata>' + bank_items + '</objectbank></questestinterop>')
+    fixed = item('p1', 'multiple_choice_question', 'Which caste lays the eggs?', 1, [('801', 'The queen'), ('802', 'Workers'), ('803', 'Drones')], extra=rc('<varequal respident="response1">801</varequal>'))
+    fixed = fixed.replace('</resprocessing></item>', '</resprocessing><itemfeedback ident="general_fb"><flow_mat><material><mattext texttype="text/html">&lt;p&gt;Only the queen lays fertilized eggs.&lt;/p&gt;</mattext></material></flow_mat></itemfeedback></item>')
+    group = '<section ident="grp1" title="Bee facts draw"><selection_ordering><selection><sourcebank_ref>bank_bees</sourcebank_ref><selection_number>2</selection_number><selection_extension><points_per_item>1.0</points_per_item></selection_extension></selection></selection_ordering></section>'
+    w('non_cc_assessments/qz_practice.xml.qti', '<?xml version="1.0" encoding="UTF-8"?><questestinterop xmlns="http://www.imsglobal.org/xsd/ims_qtiasiv1p2"><assessment ident="qz_practice" title="Practice: bee basics"><section ident="root_section">' + fixed + group + '</section></assessment></questestinterop>')
+    w('qz_practice/assessment_meta.xml', '<?xml version="1.0" encoding="UTF-8"?><quiz identifier="qz_practice" xmlns="http://canvas.instructure.com/xsd/cccv1p0"><title>Practice: bee basics</title><quiz_type>practice_quiz</quiz_type><allowed_attempts>-1</allowed_attempts><show_correct_answers>true</show_correct_answers><available>true</available><assignment_group_identifierref>ag_quiz</assignment_group_identifierref></quiz>')
+    res.append('<resource identifier="qz_practice" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="qz_practice/assessment_meta.xml"><file href="qz_practice/assessment_meta.xml"/><file href="non_cc_assessments/qz_practice.xml.qti"/></resource>')
+    # An announcement (Canvas exports these as discussion topics of type "announcement").
+    w('ann_welcome.xml', '<?xml version="1.0" encoding="UTF-8"?><topic xmlns="http://www.imsglobal.org/xsd/imsccv1p1/imsdt_v1p1"><title>Welcome, beekeepers</title><text texttype="text/html">&lt;p&gt;Glad you are here.&lt;/p&gt;</text></topic>')
+    w('ann_welcome_meta.xml', '<?xml version="1.0" encoding="UTF-8"?><topicMeta identifier="ann_welcome_meta" xmlns="http://canvas.instructure.com/xsd/cccv1p0"><topic_id>ann_welcome</topic_id><title>Welcome, beekeepers</title><type>announcement</type><posted_at>2027-01-25T15:00:00</posted_at><workflow_state>active</workflow_state></topicMeta>')
+    res.append('<resource identifier="ann_welcome" type="imsdt_xmlv1p1"><file href="ann_welcome.xml"/><dependency identifierref="ann_welcome_meta"/></resource>')
+    res.append('<resource identifier="ann_welcome_meta" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="ann_welcome_meta.xml"><file href="ann_welcome_meta.xml"/></resource>')
+
     def mi(ident, ctype, title, ref=None, indent=1, state='active', url=None):
         return (f'<item identifier="{ident}"><content_type>{ctype}</content_type><workflow_state>{state}</workflow_state><title>{title}</title>'
                 + (f'<identifierref>{ref}</identifierref>' if ref else '') + (f'<url>{url}</url>' if url else '') + f'<indent>{indent}</indent></item>')
@@ -132,7 +150,7 @@ def build():
       + mi('i8', 'ContextModuleSubHeader', 'Do', indent=0) + mi('i9', 'Assignment', 'Hive inspection log', 'as_log') + '</items></module>'
       + '<module identifier="m_w2"><title>Week 2: Through the Seasons</title><workflow_state>active</workflow_state><items>'
       + mi('i10', 'WikiPage', 'Week 2 Overview: Through the Seasons', 'pg_w2') + mi('i11', 'Quizzes::Quiz', 'Honey bee quiz', 'qz_bees')
-      + mi('i12', 'Assignment', 'Season plan', 'as_plan') + '</items></module></modules>')
+      + mi('i12', 'Assignment', 'Season plan', 'as_plan') + mi('i13', 'Quizzes::Quiz', 'Practice: bee basics', 'qz_practice') + '</items></module></modules>')
 
     w('imsmanifest.xml', '<?xml version="1.0" encoding="UTF-8"?>\n<manifest identifier="sample" xmlns="http://www.imsglobal.org/xsd/imsccv1p1/imscp_v1p1" xmlns:lomimscc="http://ltsc.ieee.org/xsd/imsccv1p1/LOM/manifest"><metadata><schema>IMS Common Cartridge</schema><schemaversion>1.1.0</schemaversion><lomimscc:lom><lomimscc:general><lomimscc:title><lomimscc:string>Backyard Beekeeping (Sample)</lomimscc:string></lomimscc:title></lomimscc:general></lomimscc:lom></metadata><organizations><organization identifier="org_1" structure="rooted-hierarchy"><item identifier="LearningModules"/></organization></organizations><resources>' + ''.join(res) + '</resources></manifest>')
     z.close()

@@ -5,7 +5,7 @@ define('APP', 1);
 $tmp = sys_get_temp_dir() . '/helmsman-selftest-' . bin2hex(random_bytes(4));
 define('DATA_DIR', $tmp);
 $src = __DIR__ . '/../src';
-foreach (['compat', 'core', 'course', 'import'] as $f) require "$src/lib/$f.php";
+foreach (['compat', 'core', 'course', 'import', 'views'] as $f) require "$src/lib/$f.php";
 data_init();
 $_SESSION = ['csrf' => 'x'];
 
@@ -83,6 +83,23 @@ $c = course($cid); save_course(array_diff_key($c, ['files_key' => 1]));
 ok(course($cid)['files_key'] === $c['files_key'], 'saving settings never drops the files key');
 $w1 = $ct['modules'][1];
 ok($w1['unlock_at'] === cc_time('2027-02-01T14:00:00'), 'module release date inferred');
+
+section('practice quizzes, question banks, feedback, announcements');
+$pq = $ct['quizzes']['qz_practice'] ?? null;
+ok($pq && !empty($pq['practice']) && !empty($pq['omit']), 'practice quiz flagged and not counted');
+ok($pq && count($pq['questions']) === 1 && count($pq['pools']) === 1 && $pq['pools'][0]['pick'] === 2 && $pq['pools'][0]['count'] === 4, 'bank draw imported as a pool');
+ok($pq && quiz_points($pq) == 3 && quiz_question_count($pq) === 3, 'pool counts toward points and questions');
+ok($pq && str_contains($pq['questions'][0]['feedback'], 'Only the queen'), 'question feedback imported');
+ok(!isset(graded_items($cid)['qz_practice']) && isset(gradables($cid)['qz_practice']), 'practice quiz kept out of the gradebook');
+[$order, $drawn] = draw_attempt($cid, $pq);
+ok(count($order) === 3 && count($drawn) === 2 && $drawn[0]['points'] == 1, 'each attempt draws its own questions');
+$att = ['order' => $order, 'drawn' => $drawn, 'answers' => []];
+foreach ($drawn as $dq) foreach ($dq['choices'] as $ch) if ($ch['correct']) $att['answers'][$dq['id']] = $ch['id'];
+$att['answers'][$pq['questions'][0]['id']] = '801';
+score_attempt($pq, $att);
+ok($att['score'] == 3 && attempt_points($pq, $att) == 3, 'drawn questions are scored');
+$ann = $ct['announcements']['ann_welcome'] ?? null;
+ok($ann && $ann['title'] === 'Welcome, beekeepers' && !isset($ct['discussions']['ann_welcome']), 'announcements imported as announcements');
 
 section('grade math');
 $course = $c; $course['groups'] = [['id' => 'a', 'title' => 'A', 'weight' => 75], ['id' => 'b', 'title' => 'B', 'weight' => 25]];

@@ -164,10 +164,12 @@ function import_imscc($zipPath, $opt = []) {
       'group' => $defaultGroup, 'due_at' => 0, 'lock_at' => 0, 'require_initial' => false, 'published' => true, 'post_policy' => 'auto'];
     // Canvas puts real HTML in <text> already decoded by SimpleXML; only decode if it still looks escaped.
     $d['body'] = str_contains(xs($x->text), '<') ? xs($x->text) : html_entity_decode(xs($x->text), ENT_QUOTES, 'UTF-8');
+    $isAnnouncement = false; $postedAt = 0;
     foreach ($r['deps'] as $dep) {
       $mf = $res[$dep]['href'] ?? ($res[$dep]['files'][0] ?? null);
       $mx = $mf ? xml_load($read($mf)) : null;
       if (!$mx) continue;
+      if (xs($mx->type) === 'announcement') { $isAnnouncement = true; $postedAt = cc_time(xs($mx->posted_at) ?: xs($mx->delayed_post_at)); }
       $d['require_initial'] = xs($mx->require_initial_post) === 'true';
       if (xs($mx->workflow_state) === 'unpublished') $d['published'] = false;
       if (isset($mx->assignment)) {
@@ -179,12 +181,32 @@ function import_imscc($zipPath, $opt = []) {
       }
       if (xs($mx->delayed_post_at)) $d['unlock_at'] = cc_time(xs($mx->delayed_post_at));
     }
+    if ($isAnnouncement) {
+      // Canvas exports announcements as discussion topics; bring them in as announcements.
+      $content['announcements'][$id] = ['id' => $id, 'title' => $d['title'], 'body' => $d['body'], 'post_at' => $postedAt, 'created' => $postedAt ?: now(), 'notified' => true];
+      continue;
+    }
     $content['discussions'][$id] = $d;
   }
 
   // ---- quizzes ----
   $quizAlias = [];
   $qwarn = 0;
+  $pools = []; // pool id => questions, written to their own files after links are rewritten
+  $bankCache = [];
+  $loadBank = function ($bankId) use ($read, &$bankCache) {
+    $bankId = safe_id($bankId);
+    if (!isset($bankCache[$bankId])) {
+      $s = $read("non_cc_assessments/$bankId.xml.qti");
+      $x = $s ? xml_load($s) : null;
+      $title = '';
+      if ($x) foreach ($x->xpath('//objectbank/qtimetadata/qtimetadatafield') ?: [] as $f) if (xs($f->fieldlabel) === 'bank_title') $title = xs($f->fieldentry);
+      $qs = []; $w = 0;
+      foreach ($x ? ($x->xpath('//item') ?: []) : [] as $it) { [$q, $bad] = qti_item($it); $qs[] = $q; $w += $bad; }
+      $bankCache[$bankId] = ['title' => $title, 'questions' => $qs, 'warn' => $w];
+    }
+    return $bankCache[$bankId];
+  };
   foreach ($res as $r) {
     $meta = null; $folder = null;
     foreach ($r['files'] as $f) if (preg_match('~^(.+)/assessment_meta\.xml$~', $f, $m)) { $meta = $f; $folder = $m[1]; }
@@ -193,10 +215,16 @@ function import_imscc($zipPath, $opt = []) {
     $qtiStr = $read("non_cc_assessments/$folder.xml.qti") ?? $read("$folder/assessment_qti.xml");
     foreach ($r['files'] as $f) if (!$qtiStr && str_ends_with($f, '.qti')) $qtiStr = $read($f);
     $id = safe_id($r['id']);
-    [$questions, $warn] = parse_qti($qtiStr);
+    [$questions, $warn, $qpools] = parse_qti($qtiStr, $loadBank);
     $qwarn += $warn;
+    $poolMeta = [];
+    foreach ($qpools as $p) {
+      $pid = newid('pool');
+      $pools[$pid] = $p['questions'];
+      $poolMeta[] = ['id' => $pid, 'title' => $p['title'], 'pick' => min((int)$p['pick'], count($p['questions'])), 'points' => (float)$p['points'], 'count' => count($p['questions'])];
+    }
     $as = $mx ? $mx->assignment : null;
-    $q = ['id' => $id, 'title' => $mx ? xs($mx->title) : $id, 'body' => $mx ? xs($mx->description) : '', 'questions' => $questions,
+    $q = ['id' => $id, 'title' => $mx ? xs($mx->title) : $id, 'body' => $mx ? xs($mx->description) : '', 'questions' => $questions, 'pools' => $poolMeta,
       'group' => $groupOf($mx ? (xs($mx->assignment_group_identifierref) ?: ($as ? xs($as->assignment_group_identifierref) : '')) : ''),
       'due_at' => cc_time($mx ? (xs($mx->due_at) ?: ($as ? xs($as->due_at) : '')) : ''),
       'lock_at' => cc_time($mx ? (xs($mx->lock_at) ?: ($as ? xs($as->lock_at) : '')) : ''),
@@ -208,12 +236,16 @@ function import_imscc($zipPath, $opt = []) {
       'published' => !$mx || xs($mx->available) !== 'false', 'post_policy' => 'auto'];
     if ((int)($mx ? xs($mx->allowed_attempts) : 1) === -1) $q['attempts'] = 0;
     $q['points'] = quiz_points($q);
-    if (xs($mx ? $mx->quiz_type : '') === 'survey') $q['group'] = $defaultGroup;
+    $qtype = xs($mx ? $mx->quiz_type : '');
+    if ($qtype === 'survey') $q['group'] = $defaultGroup;
+    // Canvas practice quizzes and surveys don't count; practice quizzes show answers after every attempt.
+    if (in_array($qtype, ['practice_quiz', 'survey'], true)) { $q['omit'] = true; $q['practice'] = $qtype === 'practice_quiz'; }
     $content['quizzes'][$id] = $q;
     foreach ($res as $r2) if (in_array($r['id'], $r2['deps'], true) || ($r2['href'] ?? '') === "$folder/assessment_qti.xml") $quizAlias[$r2['id']] = $id;
     $quizAlias[$folder] = $id;
   }
-  if ($content['quizzes']) $log[] = count($content['quizzes']) . ' quizzes with ' . array_sum(array_map(function ($q) { return count($q['questions']); }, $content['quizzes'])) . ' questions.' . ($qwarn ? " $qwarn question(s) used types this site doesn’t auto-grade (matching, fill-in-multiple-blanks, dropdowns); they were imported as essay questions for you to grade by hand." : '');
+  $npools = 0; foreach ($content['quizzes'] as $qz) $npools += count($qz['pools']);
+  if ($content['quizzes']) $log[] = count($content['quizzes']) . ' quizzes with ' . array_sum(array_map(function ($q) { return count($q['questions']); }, $content['quizzes'])) . ' questions' . ($npools ? ", plus $npools question bank draw" . ($npools > 1 ? 's' : '') . ' (each attempt gets its own random selection)' : '') . '.' . ($qwarn ? " $qwarn question(s) used types this site doesn’t auto-grade (matching, fill-in-multiple-blanks, dropdowns); they were imported as essay questions for you to grade by hand." : '');
 
   // ---- weblinks ----
   foreach ($res as $r) {
@@ -331,13 +363,19 @@ function import_imscc($zipPath, $opt = []) {
   $rw = function ($html) use ($cid, $slugToPage, $content, $quizAlias) {
     return cc_rewrite_links($html, $cid, $slugToPage, $content, $quizAlias);
   };
+  foreach ($content['announcements'] as $k => $o) $content['announcements'][$k]['body'] = $rw($o['body']);
   foreach (['pages', 'assignments', 'discussions', 'quizzes'] as $s) foreach ($content[$s] as $k => $o) {
     $content[$s][$k]['body'] = $rw($o['body'] ?? '');
     if ($s === 'quizzes') foreach ($o['questions'] as $qi => $q) $content[$s][$k]['questions'][$qi]['text'] = $rw($q['text']);
   }
   $content['syllabus'] = $rw($content['syllabus']);
+  foreach ($pools as $pid => $qs) {
+    foreach ($qs as &$pq) { $pq['text'] = $rw($pq['text']); $pq['id'] = newid('q'); }
+    unset($pq);
+    jwrite("c/$cid/pools/$pid", ['questions' => $qs]);
+  }
 
-  $log[] = count($content['modules']) . ' modules, ' . count($content['pages']) . ' pages, ' . count($content['assignments']) . ' assignments, ' . count($content['discussions']) . ' discussions.';
+  $log[] = count($content['modules']) . ' modules, ' . count($content['pages']) . ' pages, ' . count($content['assignments']) . ' assignments, ' . count($content['discussions']) . ' discussions' . ($content['announcements'] ? ', ' . count($content['announcements']) . ' announcements' : '') . '.';
   $unpub = 0; foreach ($content['modules'] as $m) foreach ($m['items'] as $it) if (empty($it['published'])) $unpub++;
   if ($unpub) $log[] = "$unpub item(s) were unpublished in Canvas and stay hidden from students.";
   if ($unmatched) $log[] = "$unmatched module item(s) pointed at content this site can’t import (for example external tools) and were skipped.";
@@ -380,58 +418,89 @@ function cc_rewrite_links($html, $cid, $slugToPage, $content, $quizAlias) {
   return $html;
 }
 
-// Returns [questions[], unsupportedCount]
-function parse_qti($s) {
+// Returns [questions[], unsupportedCount, pools[]].
+// A pool is a Canvas question group: pick N questions per attempt, either from questions
+// listed in the group or from a question bank ($loadBank returns the bank's questions).
+function parse_qti($s, $loadBank = null) {
   $x = xml_load($s);
-  if (!$x) return [[], 0];
-  $out = []; $warn = 0;
-  $items = $x->xpath('//item') ?: [];
-  foreach ($items as $it) {
-    $meta = [];
-    foreach ($it->xpath('.//qtimetadatafield') ?: [] as $f) $meta[xs($f->fieldlabel)] = xs($f->fieldentry);
-    $qt = $meta['question_type'] ?? '';
-    $mat = $it->xpath('./presentation/material/mattext');
-    $text = $mat ? (string)$mat[0] : '';
-    if ($text !== '' && !str_contains($text, '<')) $text = '<p>' . h($text) . '</p>';
-    $pts = isset($meta['points_possible']) ? (float)$meta['points_possible'] : 1;
-    $q = ['id' => newid('q'), 'text' => $text, 'points' => $pts, 'type' => 'essay', 'choices' => [], 'answers' => [], 'feedback' => ''];
-    $labels = [];
-    foreach ($it->xpath('.//response_label') ?: [] as $lab) {
-      $lt = $lab->xpath('./material/mattext');
-      $labels[(string)$lab['ident']] = $lt ? trim(strip_tags(html_entity_decode((string)$lt[0], ENT_QUOTES, 'UTF-8'))) : '';
+  if (!$x) return [[], 0, []];
+  $out = []; $warn = 0; $pools = [];
+  $root = $x->xpath('//assessment/section') ?: [];
+  $children = $root ? $root[0]->children() : [];
+  if (!$root) { foreach ($x->xpath('//item') ?: [] as $it) { [$q, $bad] = qti_item($it); $out[] = $q; $warn += $bad; } return [$out, $warn, []]; }
+  foreach ($children as $name => $node) {
+    if ($name === 'item') { [$q, $bad] = qti_item($node); $out[] = $q; $warn += $bad; continue; }
+    if ($name !== 'section') continue;
+    $sel = $node->xpath('./selection_ordering/selection');
+    $pick = $sel ? (int)xs($sel[0]->selection_number) : 0;
+    $pts = $sel ? $sel[0]->xpath('./selection_extension/points_per_item') : [];
+    $points = $pts ? (float)$pts[0] : 1.0;
+    $bankRef = $sel ? xs($sel[0]->sourcebank_ref) : '';
+    if ($bankRef !== '' && $loadBank) {
+      $bank = $loadBank($bankRef);
+      $warn += $bank['warn'];
+      if ($bank['questions']) $pools[] = ['title' => (string)$node['title'] ?: $bank['title'], 'pick' => $pick ?: count($bank['questions']), 'points' => $points, 'questions' => $bank['questions']];
+      continue;
     }
-    // correct = varequal not inside <not>
-    $correct = [];
-    foreach ($it->xpath('.//respcondition') ?: [] as $rc) {
-      $score = $rc->xpath('./setvar');
-      $sv = $score ? (float)$score[0] : 0;
-      foreach ($rc->xpath('./conditionvar//varequal') ?: [] as $ve) {
-        $inNot = $ve->xpath('ancestor::not');
-        if (!$inNot && $sv > 0) $correct[] = trim((string)$ve);
-      }
-    }
-    switch ($qt) {
-      case 'multiple_choice_question': case 'true_false_question': case 'multiple_answers_question':
-        $q['type'] = $qt === 'multiple_answers_question' ? 'multi' : ($qt === 'true_false_question' ? 'tf' : 'mc');
-        if ($qt === 'multiple_answers_question') {
-          $correct = [];
-          foreach ($it->xpath('.//respcondition/conditionvar/and/varequal') ?: [] as $ve) $correct[] = trim((string)$ve);
-        }
-        foreach ($labels as $lid => $lt) $q['choices'][] = ['id' => (string)$lid, 'text' => $lt, 'correct' => in_array((string)$lid, $correct, true)];
-        break;
-      case 'short_answer_question':
-        $q['type'] = 'short'; $q['answers'] = array_values(array_unique($correct)); break;
-      case 'numerical_question':
-        $q['type'] = 'numeric';
-        $gte = $it->xpath('.//vargte'); $lte = $it->xpath('.//varlte');
-        if ($gte && $lte) { $lo = (float)$gte[0]; $hi = (float)$lte[0]; $q['value'] = ($lo + $hi) / 2; $q['tolerance'] = ($hi - $lo) / 2; }
-        else { $q['value'] = (float)($correct[0] ?? 0); $q['tolerance'] = 0; }
-        break;
-      case 'essay_question': case 'file_upload_question': $q['type'] = 'essay'; break;
-      case 'text_only_question': $q['type'] = 'text'; $q['points'] = 0; break;
-      default: $q['type'] = 'essay'; $warn++;
-    }
-    $out[] = $q;
+    $items = [];
+    foreach ($node->xpath('.//item') ?: [] as $it) { [$q, $bad] = qti_item($it); $items[] = $q; $warn += $bad; }
+    if ($pick > 0 && $pick < count($items)) $pools[] = ['title' => (string)$node['title'], 'pick' => $pick, 'points' => $points, 'questions' => $items];
+    else foreach ($items as $q) { if ($sel) $q['points'] = $points; $out[] = $q; }
   }
-  return [$out, $warn];
+  return [$out, $warn, $pools];
+}
+
+// One QTI item to a question. Returns [question, 1 if its type isn't auto-gradable here].
+function qti_item($it) {
+  $meta = [];
+  foreach ($it->xpath('.//qtimetadatafield') ?: [] as $f) $meta[xs($f->fieldlabel)] = xs($f->fieldentry);
+  $qt = $meta['question_type'] ?? '';
+  $mat = $it->xpath('./presentation/material/mattext');
+  $text = $mat ? (string)$mat[0] : '';
+  if ($text !== '' && !str_contains($text, '<')) $text = '<p>' . h($text) . '</p>';
+  $pts = isset($meta['points_possible']) ? (float)$meta['points_possible'] : 1;
+  $fb = '';
+  foreach (['general_fb', 'correct_fb'] as $fid) {
+    $m = $it->xpath('./itemfeedback[@ident="' . $fid . '"]//mattext');
+    if ($m && trim((string)$m[0]) !== '') { $fb = trim((string)$m[0]); break; }
+  }
+  $q = ['id' => newid('q'), 'text' => $text, 'points' => $pts, 'type' => 'essay', 'choices' => [], 'answers' => [], 'feedback' => $fb];
+  $labels = [];
+  foreach ($it->xpath('.//response_label') ?: [] as $lab) {
+    $lt = $lab->xpath('./material/mattext');
+    $labels[(string)$lab['ident']] = $lt ? trim(preg_replace('/\s+/u', ' ', strip_tags(html_entity_decode((string)$lt[0], ENT_QUOTES, 'UTF-8')))) : '';
+  }
+  // correct = varequal not inside <not>, in a condition that awards points
+  $correct = [];
+  foreach ($it->xpath('.//respcondition') ?: [] as $rc) {
+    $score = $rc->xpath('./setvar');
+    $sv = $score ? (float)$score[0] : 0;
+    foreach ($rc->xpath('./conditionvar//varequal') ?: [] as $ve) {
+      $inNot = $ve->xpath('ancestor::not');
+      if (!$inNot && $sv > 0) $correct[] = trim((string)$ve);
+    }
+  }
+  $warn = 0;
+  switch ($qt) {
+    case 'multiple_choice_question': case 'true_false_question': case 'multiple_answers_question':
+      $q['type'] = $qt === 'multiple_answers_question' ? 'multi' : ($qt === 'true_false_question' ? 'tf' : 'mc');
+      if ($qt === 'multiple_answers_question') {
+        $correct = [];
+        foreach ($it->xpath('.//respcondition/conditionvar/and/varequal') ?: [] as $ve) $correct[] = trim((string)$ve);
+      }
+      foreach ($labels as $lid => $lt) $q['choices'][] = ['id' => (string)$lid, 'text' => $lt, 'correct' => in_array((string)$lid, $correct, true)];
+      break;
+    case 'short_answer_question':
+      $q['type'] = 'short'; $q['answers'] = array_values(array_unique($correct)); break;
+    case 'numerical_question':
+      $q['type'] = 'numeric';
+      $gte = $it->xpath('.//vargte'); $lte = $it->xpath('.//varlte');
+      if ($gte && $lte) { $lo = (float)$gte[0]; $hi = (float)$lte[0]; $q['value'] = ($lo + $hi) / 2; $q['tolerance'] = ($hi - $lo) / 2; }
+      else { $q['value'] = (float)($correct[0] ?? 0); $q['tolerance'] = 0; }
+      break;
+    case 'essay_question': case 'file_upload_question': $q['type'] = 'essay'; break;
+    case 'text_only_question': $q['type'] = 'text'; $q['points'] = 0; break;
+    default: $q['type'] = 'essay'; $warn = 1;
+  }
+  return [$q, $warn];
 }

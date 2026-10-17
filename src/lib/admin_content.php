@@ -311,7 +311,10 @@ function r_edit() {
         $o['group'] = safe_id(post('group'));
         $o['due_at'] = input_ts(post('due_at'), $tz); $o['lock_at'] = input_ts(post('lock_at'), $tz);
         $o['time_limit'] = max(0, (int)post('time_limit')); $o['attempts'] = max(0, (int)post('attempts'));
-        $o['shuffle'] = post('shuffle') === '1'; $o['show_answers'] = in_array(post('show_answers'), ['after_submit', 'after_due', 'never'], true) ? post('show_answers') : 'after_submit';
+        $o['shuffle'] = post('shuffle') === '1';
+        $wasPractice = !empty($o['practice']);
+        $o['practice'] = post('practice') === '1';
+        if ($o['practice']) $o['omit'] = true; elseif ($wasPractice) $o['omit'] = false; $o['show_answers'] = in_array(post('show_answers'), ['after_submit', 'after_due', 'never'], true) ? post('show_answers') : 'after_submit';
         $o['post_policy'] = post('post_policy') === 'manual' ? 'manual' : 'auto';
         $qs = json_decode((string)($_POST['questions_json'] ?? '[]'), true);
         if (is_array($qs)) $o['questions'] = normalize_questions($qs);
@@ -350,6 +353,7 @@ function r_edit() {
     <?php elseif ($type === 'quiz'): ?>
       <label>Instructions</label><?= editor_field($cid, 'body', $o['body'] ?? '', 6) ?>
       <fieldset class="card"><legend>Questions</legend>
+        <?php if (!empty($o['pools'])): ?><div class="flash warn small">Besides the questions below, each attempt draws <?= implode(' and ', array_map(function ($p) { return (int)$p['pick'] . ' question' . ($p['pick'] == 1 ? '' : 's') . ' at random from “' . h($p['title'] ?: 'question bank') . '” (' . (int)$p['count'] . ' questions, ' . fmt_num($p['points']) . ' pt each)'; }, $o['pools'])) ?>. The bank came from your Canvas import and is kept as it is.</div><?php endif; ?>
         <div id="qbuilder" data-json="<?= h(json_encode($o['questions'] ?? [])) ?>"></div>
         <input type="hidden" name="questions_json" id="questions_json">
       </fieldset>
@@ -398,6 +402,7 @@ function r_edit() {
         <label>Time limit (minutes) <input type="number" min="0" name="time_limit" value="<?= (int)($o['time_limit'] ?? 0) ?>" class="w6"><small>0 = no limit.</small></label>
         <label>Attempts allowed <input type="number" min="0" name="attempts" value="<?= (int)($o['attempts'] ?? 1) ?>" class="w6"><small>0 = unlimited. The highest score counts.</small></label>
         <label class="check"><input type="checkbox" name="shuffle" value="1" <?= !empty($o['shuffle']) ? 'checked' : '' ?>> Shuffle answer choices</label>
+        <label class="check"><input type="checkbox" name="practice" value="1" <?= !empty($o['practice']) ? 'checked' : '' ?>> Practice quiz: doesn’t count toward the grade, and shows answers and explanations after every attempt</label>
         <label>Show correct answers <select name="show_answers"><?php foreach (['after_submit' => 'After the student’s last attempt', 'after_due' => 'After the due date', 'never' => 'Never'] as $k => $v) echo '<option value="' . $k . '"' . (($o['show_answers'] ?? '') === $k ? ' selected' : '') . '>' . $v . '</option>'; ?></select></label>
       </fieldset>
     <?php endif; ?>

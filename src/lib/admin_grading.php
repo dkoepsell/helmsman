@@ -152,7 +152,7 @@ function r_grade() {
         <?php $a = $atts[$sel]; $res = $a['results'] ?? []; ?>
         <p class="muted small">Started <?= h(fmt_dt($a['started'], $course['tz'])) ?>, submitted <?= h(fmt_dt($a['submitted'], $course['tz'])) ?> (<?= max(1, round(($a['submitted'] - $a['started']) / 60)) ?> min)</p>
         <form method="post" id="gform" class="stack"><?= csrf_field() ?><input type="hidden" name="attempt" value="<?= (int)$sel ?>">
-        <?php $n = 0; foreach ($o['questions'] as $qq): if ($qq['type'] === 'text') continue; $n++; $ans = $a['answers'][$qq['id']] ?? null; $r = $res[$qq['id']] ?? [null, null]; ?>
+        <?php $n = 0; foreach (array_intersect_key(attempt_questions($o, $a), array_flip(array_merge($a['order'] ?? [], array_column($o['questions'], 'id')))) as $qq): if ($qq['type'] === 'text') continue; $n++; $ans = $a['answers'][$qq['id']] ?? null; $r = $res[$qq['id']] ?? [null, null]; ?>
           <div class="question <?= $r[1] === true ? 'right' : ($r[1] === false ? 'wrong' : '') ?>"><div class="row between"><b>Q<?= $n ?></b><span class="small"><?= $r[0] === null ? '<span class="pill warn">Needs grading</span>' : fmt_num($r[0]) . ' / ' . fmt_num($qq['points']) ?></span></div>
             <div class="prose small"><?= $qq['text'] ?></div>
             <div class="answer"><?= quiz_answer_text($qq, $ans) ?></div>
@@ -225,7 +225,7 @@ function quiz_answer_text($qq, $ans) {
 
 function r_gradebook() {
   $cid = safe_id(get('c')); require_admin(); $course = require_course($cid);
-  $gs = gradables($cid);
+  $gs = graded_items($cid);
   $students = active_students($cid);
   ob_start(); ?>
   <div class="head-row"><h1>Gradebook</h1><div class="row"><a class="btn sm" href="<?= h(u('gradebook_csv', ['c' => $cid])) ?>">Export CSV</a><a class="btn sm" href="<?= h(u('course_settings', ['c' => $cid])) ?>">Weights &amp; policies</a></div></div>
@@ -250,7 +250,7 @@ function r_gradebook() {
 
 function r_gradebook_csv() {
   $cid = safe_id(get('c')); require_admin(); $course = require_course($cid);
-  $gs = gradables($cid);
+  $gs = graded_items($cid);
   $fn = preg_replace('/[^A-Za-z0-9]+/', '-', $course['code'] ?: $course['title']) . '-grades-' . date('Y-m-d') . '.csv';
   while (ob_get_level()) ob_end_clean();
   header('Content-Type: text/csv; charset=utf-8');

@@ -39,7 +39,7 @@ function staff_rail($cid) {
   $o = '<h3>Instructor</h3><ul class="rail-list">';
   $o .= '<li><a href="' . h(u('people', ['c' => $cid])) . '">' . icon('users') . " $act student" . ($act == 1 ? '' : 's') . '</a>' . ($pen ? ' <a class="pill warn" href="' . h(u('people', ['c' => $cid])) . '">' . $pen . ' to approve</a>' : '') . '</li>';
   $tg = [];
-  foreach (gradables($cid) as $g) if ($n = needs_grading_count($cid, $g['id'])) $tg[] = '<li><a href="' . h(u('grading', ['c' => $cid, 'id' => $g['id']])) . '">' . icon('grade') . ' ' . h($g['title']) . '</a> <span class="pill warn">' . $n . '</span></li>';
+  foreach (graded_items($cid) as $g) if ($n = needs_grading_count($cid, $g['id'])) $tg[] = '<li><a href="' . h(u('grading', ['c' => $cid, 'id' => $g['id']])) . '">' . icon('grade') . ' ' . h($g['title']) . '</a> <span class="pill warn">' . $n . '</span></li>';
   $o .= $tg ? implode('', $tg) : '<li class="muted">' . icon('check') . ' Nothing to grade</li>';
   $ph = placeholder_pages($cid);
   if ($ph) {

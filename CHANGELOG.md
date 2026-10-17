@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.2 (2026-10-17)
+
+- Quizzes that draw questions from a Canvas question bank now import. Each attempt draws
+  its own set of questions from the bank, and the draw counts toward points.
+- Canvas practice quizzes and surveys import as practice: students can take them as often
+  as allowed, see the answers and explanations after each attempt, and they stay out of
+  the gradebook. A "Practice quiz" checkbox in the quiz editor turns this on or off.
+- Answer feedback written in Canvas (general and correct-answer comments) now imports and
+  shows after an attempt.
+- Canvas announcements now import as announcements instead of discussions.
+
 ## 1.0.1 (2026-10-17)
 
 - Fixed: Course settings would not save. The "New code" button was a form inside the

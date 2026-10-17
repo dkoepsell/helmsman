@@ -230,7 +230,7 @@ function course_band_style($c) {
 // Gradables a student still needs to do.
 function todo_items($cid, $uid) {
   $out = [];
-  foreach (gradables($cid) as $g) {
+  foreach (graded_items($cid) as $g) {
     $a = access($cid, $g['type'], $g['id']);
     if (!$a['ok']) continue;
     if ($g['type'] === 'assignment' && !$g['submits']) continue;
@@ -523,7 +523,7 @@ function r_syllabus() {
 function schedule_table($cid) {
   $tz = course($cid)['tz'];
   $rows = [];
-  foreach (gradables($cid) as $g) {
+  foreach (graded_items($cid) as $g) {
     if (!staff($cid)) { $a = access($cid, $g['type'], $g['id']); if (!$a['ok'] && !$a['release']) continue; }
     $rows[] = $g;
   }
@@ -559,7 +559,7 @@ function r_assignments() {
   $course = require_course($cid);
   $staff = staff($cid);
   $uid = me()['id'];
-  $gs = gradables($cid);
+  $gs = graded_items($cid);
   ob_start();
   echo '<div class="head-row"><h1>Assignments</h1>' . ($staff ? '<span class="muted small">Add assignments, quizzes and graded discussions from the Modules page so they have a place and release date.</span>' : '') . '</div>';
   $any = false;
@@ -871,21 +871,21 @@ function r_quiz() {
   $submitted = array_filter($atts, function ($a) { return !empty($a['submitted']); });
   $open = null; foreach ($atts as $i => $a) if (empty($a['submitted'])) $open = $i;
   $locked = !empty($q['lock_at']) && now() > $q['lock_at'];
-  $canStart = !$staff && !$locked && $open === null && (!$max || count($submitted) < $max) && !empty($q['questions']);
+  $canStart = !$staff && !$locked && $open === null && (!$max || count($submitted) < $max) && quiz_question_count($q) > 0;
 
   if (is_post() && !$staff) {
     if (previewing($cid)) { flash('Quizzes can’t be taken in student view. Use “Preview quiz” as instructor.', 'warn'); redirect(u('quiz', ['c' => $cid, 'id' => $id])); }
     if ($open !== null) redirect(u('quiz_take', ['c' => $cid, 'id' => $id]));
     if (!$canStart) throw new HttpError('You can’t start another attempt.');
-    $order = array_column($q['questions'], 'id');
+    [$order, $drawn] = draw_attempt($cid, $q);
     $choiceOrder = [];
-    if (!empty($q['shuffle'])) foreach ($q['questions'] as $qq) if (!empty($qq['choices']) && $qq['type'] !== 'tf') { $ids = array_column($qq['choices'], 'id'); shuffle($ids); $choiceOrder[$qq['id']] = $ids; }
-    jupdate(qa_path($cid, $id, $me['id']), function ($x) use ($order, $choiceOrder, $max) {
+    if (!empty($q['shuffle'])) foreach (array_merge($q['questions'], $drawn) as $qq) if (!empty($qq['choices']) && $qq['type'] !== 'tf') { $ids = array_column($qq['choices'], 'id'); shuffle($ids); $choiceOrder[$qq['id']] = $ids; }
+    jupdate(qa_path($cid, $id, $me['id']), function ($x) use ($order, $drawn, $choiceOrder, $max) {
       // Re-check under the lock so two browsers can't start extra attempts at once.
       $done = 0;
       foreach ($x['attempts'] as $a) { if (empty($a['submitted'])) return null; $done++; }
       if ($max && $done >= $max) return null;
-      $x['attempts'][] = ['started' => now(), 'order' => $order, 'corder' => $choiceOrder, 'answers' => [], 'submitted' => 0];
+      $x['attempts'][] = ['started' => now(), 'order' => $order, 'drawn' => $drawn, 'corder' => $choiceOrder, 'answers' => [], 'submitted' => 0];
       return $x;
     }, ['attempts' => []]);
     redirect(u('quiz_take', ['c' => $cid, 'id' => $id]));
@@ -896,9 +896,10 @@ function r_quiz() {
   <dl class="facts">
     <div><dt>Due</dt><dd><?= !empty($q['due_at']) ? h(fmt_dt($q['due_at'], $tz)) : 'No due date' ?></dd></div>
     <div><dt>Points</dt><dd><?= fmt_num(quiz_points($q)) ?></dd></div>
-    <div><dt>Questions</dt><dd><?= count(array_filter($q['questions'], function ($x) { return $x['type'] !== 'text'; })) ?></dd></div>
+    <div><dt>Questions</dt><dd><?= quiz_question_count($q) ?><?= !empty($q['pools']) ? ' <small class="muted">(drawn at random for each attempt)</small>' : '' ?></dd></div>
     <div><dt>Time limit</dt><dd><?= !empty($q['time_limit']) ? (int)$q['time_limit'] . ' min' : 'None' ?></dd></div>
     <div><dt>Attempts</dt><dd><?= $max ?: 'Unlimited' ?></dd></div>
+    <?php if (!empty($q['practice'])): ?><div><dt>Counts toward grade</dt><dd>No, practice</dd></div><?php endif; ?>
     <?php if (!empty($q['lock_at'])): ?><div><dt>Closes</dt><dd><?= h(fmt_dt($q['lock_at'], $tz)) ?></dd></div><?php endif; ?>
   </dl>
   <article class="prose"><?= $q['body'] ?? '' ?></article>
@@ -910,7 +911,7 @@ function r_quiz() {
     <?php if ($submitted): $sub = get_sub($cid, $id, $me['id']); $posted = grade_posted($sub); ?>
       <h2>Your attempts</h2><table class="tbl"><thead><tr><th>Attempt</th><th>Submitted</th><th class="num">Score</th><th></th></tr></thead><tbody>
       <?php foreach ($atts as $i => $a) if (!empty($a['submitted'])): ?>
-        <tr><td><?= $i + 1 ?></td><td><?= h(fmt_dt($a['submitted'], $tz)) ?></td><td class="num"><?= $posted ? fmt_num($a['score']) . ' / ' . fmt_num(quiz_points($q)) . (!empty($a['needs_manual']) ? ' <small class="muted">(some answers still being graded)</small>' : '') : '<span class="muted">Not released</span>' ?></td><td><a href="<?= h(u('quiz_take', ['c' => $cid, 'id' => $id, 'view' => $i])) ?>">Review</a></td></tr>
+        <tr><td><?= $i + 1 ?></td><td><?= h(fmt_dt($a['submitted'], $tz)) ?></td><td class="num"><?= $posted ? fmt_num($a['score']) . ' / ' . fmt_num(attempt_points($q, $a)) . (!empty($a['needs_manual']) ? ' <small class="muted">(some answers still being graded)</small>' : '') : '<span class="muted">Not released</span>' ?></td><td><a href="<?= h(u('quiz_take', ['c' => $cid, 'id' => $id, 'view' => $i])) ?>">Review</a></td></tr>
       <?php endif; ?></tbody></table>
       <?= comments_html($cid, $id, $sub, u('assignment_comment', ['c' => $cid, 'id' => $id])) ?>
     <?php endif; ?>
@@ -937,7 +938,7 @@ function r_assignment_comment() {
 
 function score_attempt($quiz, &$att) {
   $score = 0; $needs = false; $res = [];
-  foreach ($quiz['questions'] as $qq) {
+  foreach (attempt_questions($quiz, $att) as $qq) {
     if ($qq['type'] === 'text') continue;
     $ans = $att['answers'][$qq['id']] ?? null;
     if (isset($att['manual'][$qq['id']])) { $p = (float)$att['manual'][$qq['id']]; $res[$qq['id']] = [$p, null]; $score += $p; continue; }
@@ -968,8 +969,10 @@ function r_quiz_take() {
   $viewIdx = get('view', '') === '' ? null : (int)get('view');
 
   if ($isPreview) {
-    $att = ['started' => now(), 'order' => array_column($q['questions'], 'id'), 'answers' => [], 'corder' => []];
-    if (is_post()) { $att['answers'] = $_POST['ans'] ?? []; $att['submitted'] = now(); score_attempt($q, $att); return quiz_view($cid, $q, $att, 'review', true); }
+    // Preview: drawn questions travel in the session so the submitted preview is scored against what was shown.
+    if (is_post() && !empty($_SESSION['qpreview'][$id])) $att = $_SESSION['qpreview'][$id];
+    else { [$order, $drawn] = draw_attempt($cid, $q); $att = ['started' => now(), 'order' => $order, 'drawn' => $drawn, 'answers' => [], 'corder' => []]; $_SESSION['qpreview'][$id] = $att; }
+    if (is_post()) { $att['answers'] = is_array($_POST['ans'] ?? null) ? $_POST['ans'] : []; $att['submitted'] = now(); score_attempt($q, $att); unset($_SESSION['qpreview'][$id]); return quiz_view($cid, $q, $att, 'review', true); }
     return quiz_view($cid, $q, $att, 'take', true);
   }
   if ($staff) redirect(u('quiz', ['c' => $cid, 'id' => $id]));
@@ -991,7 +994,7 @@ function r_quiz_take() {
     // Keep only answers to this quiz's questions, with sane sizes.
     $raw = is_array($_POST['ans'] ?? null) ? $_POST['ans'] : [];
     $answers = [];
-    foreach ($q['questions'] as $qq) {
+    foreach (attempt_questions($q, $att) as $qq) {
       if (!array_key_exists($qq['id'], $raw)) continue;
       $v = $raw[$qq['id']];
       $answers[$qq['id']] = is_array($v) ? array_slice(array_map(function ($x) { return mb_substr((string)$x, 0, 100); }, $v), 0, 50) : mb_substr((string)$v, 0, 30000);
@@ -1019,9 +1022,10 @@ function r_quiz_take() {
 
 function quiz_view($cid, $q, $att, $mode, $isPreview, $deadline = 0) {
   $course = course($cid);
-  $byId = []; foreach ($q['questions'] as $qq) $byId[$qq['id']] = $qq;
+  $byId = attempt_questions($q, $att);
   $order = array_values(array_filter($att['order'] ?? [], function ($x) use ($byId) { return isset($byId[$x]); }));
-  foreach ($byId as $qid => $qq) if (!in_array($qid, $order, true)) $order[] = $qid;
+  // Fixed questions added after the attempt started still appear; undrawn pool questions don't.
+  foreach ($q['questions'] as $qq) if (!in_array($qq['id'], $order, true)) $order[] = $qq['id'];
   $review = $mode === 'review';
   $sub = get_sub($cid, $q['id'], me()['id']);
   $released = $isPreview || grade_posted($sub);
@@ -1031,12 +1035,13 @@ function quiz_view($cid, $q, $att, $mode, $isPreview, $deadline = 0) {
   $done = 0; foreach (quiz_attempts($cid, $q['id'], me()['id']) as $qa) if (!empty($qa['submitted'])) $done++;
   $maxA = (int)($q['attempts'] ?? 1);
   $over = (!empty($q['lock_at']) && now() > $q['lock_at']) || (!empty($q['due_at']) && now() > $q['due_at']);
-  $showAnswers = $isPreview || ($released && (($show === 'after_submit' && (($maxA && $done >= $maxA) || $over)) || ($show === 'after_due' && $over)));
+  // Practice quizzes show answers and explanations after every attempt.
+  $showAnswers = $isPreview || ($released && (!empty($q['practice']) && $show !== 'never' || ($show === 'after_submit' && (($maxA && $done >= $maxA) || $over)) || ($show === 'after_due' && $over)));
   $res = $att['results'] ?? [];
   ob_start(); ?>
   <div class="head-row"><h1><?= h($q['title']) ?></h1><?php if ($isPreview): ?><span class="pill warn">Instructor preview: nothing is saved</span><?php endif; ?></div>
   <?php if ($review): ?>
-    <div class="card quiz-score"><b>Score: <?= $released ? fmt_num($att['score']) . ' / ' . fmt_num(quiz_points($q)) : 'not released yet' ?></b><?= !empty($att['needs_manual']) && $released ? '<span class="muted"> · essay answers still to be graded</span>' : '' ?></div>
+    <div class="card quiz-score"><b>Score: <?= $released ? fmt_num($att['score']) . ' / ' . fmt_num(attempt_points($q, $att)) : 'not released yet' ?></b><?= !empty($att['needs_manual']) && $released ? '<span class="muted"> · essay answers still to be graded</span>' : '' ?></div>
   <?php elseif ($deadline): ?>
     <div class="timer" data-deadline="<?= (int)$deadline ?>" data-now="<?= now() ?>"><?= icon('clock') ?> <span>--:--</span> left</div>
   <?php endif; ?>
@@ -1068,7 +1073,7 @@ function quiz_view($cid, $q, $att, $mode, $isPreview, $deadline = 0) {
           echo $review ? '<div class="subtext">' . user_text(is_string($ans) ? $ans : '') . '</div>' : '<textarea name="' . $nm . '" rows="8">' . h(is_string($ans) ? $ans : '') . '</textarea>';
           break;
       }
-      if ($review && $showAnswers && !empty($qq['feedback'])) echo '<div class="qfb small">' . user_text($qq['feedback']) . '</div>';
+      if ($review && $showAnswers && !empty($qq['feedback'])) echo '<div class="qfb small">' . (str_contains($qq['feedback'], '<') ? $qq['feedback'] : user_text($qq['feedback'])) . '</div>';
       ?>
     </fieldset>
   <?php endforeach; ?>
