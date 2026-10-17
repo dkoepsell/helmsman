@@ -223,7 +223,7 @@ function r_home() {
 
 function course_band_style($c) {
   if (!empty($c['banner'])) return ' style="background-image:url(\'' . h(cfile_url($c['id'], $c['banner'])) . '\')"';
-  $hue = hexdec(substr(md5($c['id']), 0, 2)) * 360 / 255;
+  $hue = intdiv(hexdec(substr(md5($c['id']), 0, 2)) * 360, 255);
   return ' style="background:linear-gradient(135deg,hsl(' . (int)$hue . ' 35% 30%),hsl(' . (int)(($hue + 40) % 360) . ' 35% 45%))"';
 }
 

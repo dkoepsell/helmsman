@@ -10,6 +10,7 @@
 - Answer feedback written in Canvas (general and correct-answer comments) now imports and
   shows after an attempt.
 - Canvas announcements now import as announcements instead of discussions.
+- Fixed a PHP 8.1+ deprecation notice from the course banner colors.
 
 ## 1.0.1 (2026-10-17)
 
