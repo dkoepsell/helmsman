@@ -317,7 +317,7 @@ function r_course_settings() {
       <label class="check"><input type="checkbox" name="archived" value="1" <?= $c['archived'] ? 'checked' : '' ?>> Course closed (students can no longer open it)</label>
     </fieldset>
     <fieldset class="card"><legend>Enrollment</legend>
-      <p>Join code <code class="big"><?= h($c['join_code']) ?></code> <?= post_btn(u('course_settings', ['c' => $cid]), 'New code', 'btn sm', ['act' => 'newcode']) ?></p>
+      <p>Join code <code class="big"><?= h($c['join_code']) ?></code> <button class="btn sm" form="newcode-form" data-confirm="Make a new join code? The old code and sign-up link stop working.">New code</button></p>
       <p class="small">Sign-up link: <code class="sel"><?= h(base_url() . u('signup', ['code' => $c['join_code']])) ?></code></p>
       <label class="check"><input type="checkbox" name="signup_open" value="1" <?= $c['signup_open'] ? 'checked' : '' ?>> Students can request access with the join code</label>
       <label class="check"><input type="checkbox" name="auto_approve" value="1" <?= $c['auto_approve'] ? 'checked' : '' ?>> Approve requests automatically (otherwise you approve each one under People)</label>
@@ -344,6 +344,7 @@ function r_course_settings() {
   </fieldset>
   <button class="btn primary">Save settings</button>
   </form>
+  <form method="post" id="newcode-form"><?= csrf_field() ?><input type="hidden" name="act" value="newcode"></form>
   <details class="card danger-zone"><summary>Delete this course</summary>
     <form method="post" class="stack narrow"><?= csrf_field() ?><input type="hidden" name="act" value="delete"><p>This permanently deletes the course content, submissions and grades. Student accounts stay. Type the join code <b><?= h($c['join_code']) ?></b> to confirm.</p><input name="confirm" autocomplete="off"><button class="btn danger">Delete course permanently</button></form></details>
   <?php layout('Settings', ob_get_clean(), ['course' => $cid, 'active' => 'course_settings']);

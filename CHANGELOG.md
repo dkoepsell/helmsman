@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.1 (2026-10-17)
+
+- Fixed: Course settings would not save. The "New code" button was a form inside the
+  settings form, which made the Save button stop working.
+- The browser test now checks every page for forms nested inside other forms, and
+  checks that course settings save.
+
 ## 1.0.0 (2026-10-16)
 
 First public release.

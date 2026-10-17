@@ -28,6 +28,16 @@ def check(page, label):
             print('!!', label, bad, page.url)
             return
 
+def no_nested_forms(page, url, label):
+    """Browsers silently break a <form> inside another <form>; check the raw HTML."""
+    html = page.request.get(url).text()
+    depth = 0
+    for m in re.finditer(r'<(/?)form\b', html, re.I):
+        depth += -1 if m.group(1) else 1
+        if depth > 1:
+            errors.append(f'{label}: nested <form> at {url}'); return
+        depth = max(depth, 0)
+
 def shot(page, name, full=True):
     os.makedirs(OUT, exist_ok=True)
     page.screenshot(path=os.path.join(OUT, name), full_page=full)
@@ -87,6 +97,12 @@ def run(B):
         a.fill('input[name=shift]', str(days)); a.click('button:has-text("Shift all dates")'); check(a, 'shift')
         for r in ('modules', 'syllabus', 'assignments', 'discussions', 'grades', 'calendar', 'people', 'schedule', 'course_settings', 'announcements', 'files', 'site'):
             a.goto(B + f'?r={r}&c={cid}'); check(a, r)
+            no_nested_forms(a, B + f'?r={r}&c={cid}', r)
+        # Course settings actually save (a nested form once broke the Save button).
+        a.goto(B + f'?r=course_settings&c={cid}'); a.fill('input[name=title]', 'Backyard Beekeeping (Sample, renamed)')
+        a.click('button:has-text("Save settings")'); check(a, 'settings save')
+        assert 'Settings saved' in a.content() and 'renamed' in a.content(), 'course settings save'
+        a.fill('input[name=title]', 'Backyard Beekeeping (Sample)'); a.click('button:has-text("Save settings")')
 
         # add a video lecture to week 1
         a.goto(B + f'?r=modules&c={cid}')
@@ -180,6 +196,21 @@ def run(B):
             target = a.locator('.day[data-date]').nth(20)
             ev.drag_to(target); a.wait_for_timeout(1200); check(a, 'calendar move')
             assert a.locator('.ev[data-move="due:assignment:as_plan"]').evaluate('e => e.closest(".day").dataset.date') != day, 'due date moved'
+
+        # --- no nested forms anywhere else ---
+        for label, url in [('edit page', f'?r=edit&c={cid}&t=page&id=pg_w1'), ('edit assignment', f'?r=edit&c={cid}&t=assignment&id=as_log'),
+                           ('edit quiz', f'?r=edit&c={cid}&t=quiz&id=qz_bees'), ('edit discussion', f'?r=edit&c={cid}&t=discussion&id=dt_intro'),
+                           ('edit syllabus', f'?r=edit&c={cid}&t=syllabus'), ('edit announcement', f'?r=edit&c={cid}&t=announcement'),
+                           ('module edit', f'?r=module_edit&c={cid}&id=m_w1'), ('grading', f'?r=grading&c={cid}&id=as_log'),
+                           ('assignment', f'?r=assignment&c={cid}&id=as_log'), ('quiz', f'?r=quiz&c={cid}&id=qz_bees'),
+                           ('discussion', f'?r=discussion&c={cid}&id=dt_intro'), ('notifications', '?r=notifications'), ('account', '?r=account'),
+                           ('import', '?r=import'), ('new course', '?r=new_course'), ('home', '?r=home')]:
+            no_nested_forms(a, B + url, label)
+        a.goto(B + f'?r=grading&c={cid}&id=as_log'); a.click('td a:has-text("Ana Ruiz")'); no_nested_forms(a, a.url, 'grader')
+        a.goto(B + f'?r=grading&c={cid}&id=qz_bees'); a.click('td a:has-text("Ana Ruiz")'); no_nested_forms(a, a.url, 'quiz grader')
+        for label, url in [('s assignment', f'?r=assignment&c={cid}&id=as_log'), ('s quiz', f'?r=quiz&c={cid}&id=qz_bees'),
+                           ('s discussion', f'?r=discussion&c={cid}&id=dt_intro'), ('s home', '?r=home'), ('s grades', f'?r=grades&c={cid}')]:
+            no_nested_forms(s, B + url, label)
 
         # --- phone layout ---
         m = page(390, 844, True); login(m, 'ana@example.edu', 'ana-new-pass')
